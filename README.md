@@ -56,7 +56,11 @@ cp .env.example .env
 
 ## 실행
 
-저장소 최상위 폴더에서 실행함.
+저장소 최상위 폴더에서 실행함. 모델은 `--backend`로 고름(기본 `claude`). `--steps`를 빼면 100스텝.
+
+### Claude API (`--backend claude`, 기본)
+
+`.env`에 키를 넣은 뒤 실행. `claude-haiku-5-5` 하나가 모든 역할을 맡음.
 
 ```bash
 # 아주 작게(각 데이터 2개, 1스텝) 끝까지 도는지 확인
@@ -65,10 +69,37 @@ python -m experiments.jiyul.compare --method poc --debug --steps 1
 # PoC 5스텝
 python -m experiments.jiyul.compare --method poc --steps 5
 
-# 같은 조건의 OPRO, CriSPO (기본 100스텝)
-python -m experiments.jiyul.compare --method opro
-python -m experiments.jiyul.compare --method crispo
+# 같은 조건의 OPRO, CriSPO 5스텝
+python -m experiments.jiyul.compare --method opro --steps 5
+python -m experiments.jiyul.compare --method crispo --steps 5
 ```
+
+### 오픈 모델 (`--backend vllm`, gpt-oss)
+
+요약은 gpt-oss-20b, 최적화와 judge는 gpt-oss-120b가 맡음. 아래 결과표는 이 설정으로 낸 것. H200(141GB) 한 장에 두 모델을 함께 띄워 돌렸음(vLLM 0.24.0). vLLM은 의존성이 커서 이 저장소와 다른 환경에 설치하는 편이 안전함.
+
+```bash
+pip install vllm==0.24.0
+
+# 120b를 먼저 띄우고, 준비된 뒤(로그에 서버 시작 표시) 다른 터미널에서 20b를 띄움
+vllm serve openai/gpt-oss-120b --port 8001 --served-model-name gpt-oss-120b \
+  --gpu-memory-utilization 0.62 --max-model-len 32768 --reasoning-parser openai_gptoss
+vllm serve openai/gpt-oss-20b --port 8002 --served-model-name gpt-oss-20b \
+  --gpu-memory-utilization 0.25 --max-model-len 32768 --reasoning-parser openai_gptoss
+```
+
+두 서버가 뜬 뒤, 저장소 환경에서 실행.
+
+```bash
+python -m experiments.jiyul.compare --method poc --debug --steps 1 --backend vllm
+python -m experiments.jiyul.compare --method poc --steps 5 --backend vllm
+python -m experiments.jiyul.compare --method opro --steps 5 --backend vllm
+python -m experiments.jiyul.compare --method crispo --steps 5 --backend vllm
+```
+
+- 서버 주소(`TASK_URL`, `META_URL`)는 `experiments/jiyul/config.py`에 있음.
+- 답 토큰을 세는 토크나이저 경로(`TASK_TOKENIZER`, `META_TOKENIZER`)는 `$HF_HOME/hub` 아래 모델 스냅샷을 가리킴. vLLM이 모델을 받은 위치와 다르면 `HF_HOME`을 맞추거나 이 경로를 고침.
+- `--backend vllm`에서만 temperature가 적용됨(요약·judge 0, 최적화 1).
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
@@ -76,7 +107,7 @@ python -m experiments.jiyul.compare --method crispo
 | `--steps` | 100 | 최적화 스텝 수(CriSPO의 SAMSum 설정) |
 | `--seed` | 42 | train/dev/test를 뽑는 시드 |
 | `--debug` | 꺼짐 | 각 데이터를 2개만 씀 |
-| `--backend` | `claude` | `claude`는 Anthropic API, `vllm`은 직접 띄운 gpt-oss 서버(아래 참고) |
+| `--backend` | `claude` | `claude`는 Anthropic API, `vllm`은 직접 띄운 gpt-oss 서버(위 참고) |
 
 모델, 생각 강도, 후보 수, 데이터 크기 같은 값은 `experiments/jiyul/config.py`에서 바꿈.
 
@@ -99,15 +130,12 @@ python -m experiments.jiyul.compare --method crispo
 ### 비용
 
 Claude API는 토큰 단위로 과금됨(Haiku 5.5 정가: 입력 100만 토큰당 $0.10, 출력 $0.50).
+
 - Claude의 생각 길이는 gpt-oss와 달라서 실제 비용은 꽤 다를 수 있음. 실제 사용량은 `summary.json`의 `loop_cost`로 확인.
 
 ### temperature
 
 원래 설정은 요약과 judge를 temperature 0, 최적화를 temperature 1로 둠. Claude API는 temperature를 받지 않아서 `--backend claude`에서는 모든 역할이 모델 기본값으로 돎. 같은 프롬프트라도 실행마다 결과가 조금씩 달라질 수 있음. temperature 설정은 `--backend vllm`에서만 적용됨.
-
-### vLLM(gpt-oss) 백엔드
-
-아래 결과표는 이 백엔드로 낸 것. 요약은 gpt-oss-20b(`http://localhost:8002/v1`), 최적화와 judge는 gpt-oss-120b(`http://localhost:8001/v1`)가 맡음. 서버 주소와 토크나이저 경로는 `config.py`에 있음. GPU 서버가 필요해서 노트북에서는 `claude` 백엔드를 씀.
 
 ## 지금까지의 결과 (gpt-oss, 시드 42, 실행 1회)
 
