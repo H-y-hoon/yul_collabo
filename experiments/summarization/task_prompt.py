@@ -40,6 +40,8 @@ class SummarizationTaskPromptWithPlaceholder(TaskPrompt):
         found = extract_xml_tag(generation, "summary")
         if found:
             return found
+        if "<summary>" in generation:  # unclosed tag: drop the tag rather than judge it (Jiyul repro, spec 10.10)
+            return generation[generation.rfind("<summary>") + len("<summary>"):].strip()
         return generation
 
     def __str__(self) -> str:

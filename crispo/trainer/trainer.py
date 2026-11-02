@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: CC-BY-NC-4.0
 
 import abc
+import json
 import os
 import random
 import statistics
@@ -56,6 +57,10 @@ class Trainer(abc.ABC):
         max_retry=5,
         refresh_meta_prompt_each_attempt=True,
         save_every_n_steps=1,
+        stop_score=None,
+        critique_selected_only=False,
+        replace_current=False,
+        select_next=None,
     ) -> (Dict[TaskPrompt, float], str, float):
         timer = CountdownTimer(num_search_steps + 1)
         prompt_score_pairs = dict()
@@ -66,6 +71,8 @@ class Trainer(abc.ABC):
         accumulative_few_shot_example_scores = [[] for _ in range(len(train))]
         stepwise_scores = {"train": [], "dev": []}
         critiques = defaultdict(str)
+        evaluated = dict()  # task_prompt -> (scores, predictions), kept for critique_selected_only and select_next
+        current = None
 
         if task_llm is None:
             task_llm = meta_llm
@@ -119,8 +126,9 @@ class Trainer(abc.ABC):
                     )
                 self.logger.info(msg)
 
+                evaluated[task_prompt] = (scores, predictions)
                 # critique
-                if critique_prompt:
+                if critique_prompt and not critique_selected_only:
                     critiques = self.update_critique(
                         scores=scores,
                         critique_prompt=critique_prompt,
@@ -153,7 +161,7 @@ class Trainer(abc.ABC):
 
             # run evaluate on best train set prompt
             if step % dev_evaluation_per_n_steps == 0 and dev:
-                prompts_to_eval_dev = new_prompts
+                prompts_to_eval_dev = dict(new_prompts)  # a copy: adding best_prompt must not make it a new candidate (spec 10.15)
                 if best_prompt not in prompt_score_pairs_dev:
                     prompts_to_eval_dev[best_prompt] = None
 
@@ -200,8 +208,43 @@ class Trainer(abc.ABC):
                         )
                     self.logger.info(msg)
 
+            # the prompt the next step builds on: the best so far, or with replace_current the best of
+            # this step's new prompts even if it is worse (Jiyul PoC: the selected candidate always
+            # becomes the current prompt, spec 10.12)
+            if not replace_current:
+                current = best_prompt
+            elif new_prompts and select_next:  # e.g. judge score with a ROUGE floor (spec 10.14)
+                current = select_next(list(new_prompts), current, evaluated, prompt_score_pairs)
+            elif new_prompts:  # empty if every generation attempt failed to parse: keep the current
+                current = max(new_prompts, key=lambda p: metric.key(prompt_score_pairs[p]))
+
             if step == num_search_steps:
                 break
+            if stop_score is not None and metric.key(prompt_score_pairs[current]) >= stop_score:
+                self.logger.info(f"Current train score reached stop_score {stop_score}")
+                break
+
+            # critique only the prompt selected for the next step; with replace_current a kept prompt is
+            # analyzed again (meta_llm samples, so the next candidates differ; spec 10.16)
+            if (
+                critique_prompt
+                and critique_selected_only
+                and (replace_current or current not in critiques)
+            ):
+                scores, predictions = evaluated[current]
+                critiques = self.update_critique(
+                    scores=scores,
+                    critique_prompt=critique_prompt,
+                    task_prompt=current,
+                    predictions=predictions,
+                    train=train,
+                    critiques=critiques,
+                    critique_example_selection_criteria=critique_example_selection_criteria,
+                    max_score_of_example_in_critique=max_score_of_example_in_critique,
+                    meta_llm=meta_llm,
+                    num_examples_in_critique=num_examples_in_critique,
+                    metric=metric,
+                )
             # self.logger.debug('### New Prompts\n')
             # self.logger.debug(self.convert_prompt_scores_to_df(
             #     dict((k, v) for k, v in prompt_score_pairs.items() if k in new_prompts), prompt_steps).to_markdown(
@@ -210,7 +253,9 @@ class Trainer(abc.ABC):
             # Generate new task prompts
             new_prompts = self.generating_new_prompts(
                 meta_prompt=meta_prompt,
-                prompt_score_pairs=prompt_score_pairs,
+                prompt_score_pairs={current: prompt_score_pairs[current]}
+                if replace_current
+                else prompt_score_pairs,
                 train=train,
                 step_few_shot_example_scores=step_few_shot_example_scores,
                 accumulative_few_shot_example_scores=accumulative_few_shot_example_scores,
@@ -251,6 +296,12 @@ class Trainer(abc.ABC):
                     )
                     fig.savefig(f"{self.save_dir}/stepwise_scores_{_split}.png")
 
+        # the in-loop save above skips the last step, so save the full history once more
+        self.convert_prompt_scores_to_df(prompt_score_pairs, prompt_steps).to_json(
+            f"{self.save_dir}/prompts.json", indent=2, orient="records"
+        )
+        with open(f"{self.save_dir}/stepwise_scores.json", "w") as f:
+            json.dump(stepwise_scores, f, default=str)
         return prompt_score_pairs, best_prompt_dev
 
     def update_critique(
@@ -425,14 +476,17 @@ class Trainer(abc.ABC):
         prompts, generations, predictions = self.predict(
             xs, task_prompt, task_llm, desc
         )
-        scores = [
-            metric.score(p, e.y, x=e.x)
-            for p, e in tqdm(
-                zip(predictions, dataset),
-                total=len(dataset),
-                desc=metric.__class__.__name__,
-            )
-        ]
+        if hasattr(metric, "batch_score"):  # e.g. an LLM judge scoring all outputs concurrently
+            scores = metric.batch_score(predictions, dataset)
+        else:
+            scores = [
+                metric.score(p, e.y, x=e.x)
+                for p, e in tqdm(
+                    zip(predictions, dataset),
+                    total=len(dataset),
+                    desc=metric.__class__.__name__,
+                )
+            ]
         overall_score = metric.aggregate(scores)
         if prompt_score_pairs is not None:
             prompt_score_pairs[task_prompt] = overall_score

@@ -53,7 +53,7 @@ def load_samsum_debug_train_dev_test(random_seed=42):
 
 def load_samsum(split: str):
     examples = []
-    dataset = load_dataset("samsum", trust_remote_code=True)[split]
+    dataset = load_dataset("knkarthick/samsum")[split]  # original "samsum" repo is no longer on the Hub
     for example in dataset:
         examples.append(
             SummarizationExample(x=example["dialogue"], y=example["summary"])
