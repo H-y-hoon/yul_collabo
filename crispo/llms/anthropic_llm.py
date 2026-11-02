@@ -1,3 +1,4 @@
+import os
 import threading
 from typing import Optional
 
@@ -8,7 +9,8 @@ from crispo.llms import LargeLanguageModel, TYPE_PROMPT
 
 class AnthropicLLM(LargeLanguageModel):
     """
-    A Claude model behind the Anthropic Messages API (key from ``ANTHROPIC_API_KEY``). Plain-string prompts are
+    A Claude model behind the Anthropic Messages API (key from ``ANTHROPIC_API_KEY``, and the workspace from
+    ``ANTHROPIC_WORKSPACE_ID`` when the key is not scoped to one). Plain-string prompts are
     sent as a single user message. Only the final answer (the text blocks) is returned; thinking is kept out of it.
 
     Claude has no temperature setting on the current API, so every role runs at the model's default sampling;
@@ -29,7 +31,10 @@ class AnthropicLLM(LargeLanguageModel):
         super().__init__(max_new_tokens=max_new_tokens, concurrency=concurrency)
         self.model = model
         self.effort = effort
-        self.client = anthropic.Anthropic(max_retries=max_retries, timeout=600)
+        # a key that is not scoped to a workspace must name one on every request (ANTHROPIC_WORKSPACE_ID)
+        workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+        headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+        self.client = anthropic.Anthropic(max_retries=max_retries, timeout=600, default_headers=headers)
         self.records = []
         self._records_lock = threading.Lock()
 

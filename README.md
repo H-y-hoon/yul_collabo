@@ -52,6 +52,8 @@ cp .env.example .env
 
 `.env`를 열어 `ANTHROPIC_API_KEY=` 뒤에 키를 넣습니다. `.env`는 `.gitignore`에 들어 있어 커밋되지 않습니다. 환경변수 `ANTHROPIC_API_KEY`를 직접 export해도 됩니다.
 
+실행했을 때 `This API key is not scoped to a workspace` 오류가 나면, 워크스페이스에 묶이지 않은 조직 키라서 그렇습니다. Claude Console의 워크스페이스 설정에서 워크스페이스 ID(`wrkspc_...`)를 찾아 `.env`의 `ANTHROPIC_WORKSPACE_ID=` 뒤에 넣으면 됩니다. 워크스페이스에 묶인 키라면 비워 둡니다.
+
 ## 실행
 
 저장소 최상위 폴더에서 실행합니다.
