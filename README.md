@@ -99,9 +99,6 @@ python -m experiments.jiyul.compare --method crispo
 ### 비용
 
 Claude API는 토큰 단위로 과금됨(Haiku 5.5 정가: 입력 100만 토큰당 $0.10, 출력 $0.50).
-
-- gpt-oss로 돌린 PoC 10스텝 실행은 입력 약 557만, 출력 약 880만 토큰을 썼음.
-- 같은 토큰 수라면 Haiku 5.5로 10스텝에 약 $5.
 - Claude의 생각 길이는 gpt-oss와 달라서 실제 비용은 꽤 다를 수 있음. 실제 사용량은 `summary.json`의 `loop_cost`로 확인.
 
 ### temperature
